@@ -1306,10 +1306,33 @@ static Str win_quote(const Str& s) {
     return r;
 }
 
+// Returns the "group/artifact" portion of a maven relative path, e.g.
+// "org/ow2/asm/asm/9.6/asm-9.6.jar" -> "org/ow2/asm/asm".
+// Used to deduplicate libraries that appear in both vanilla and Fabric
+// (e.g. asm-9.6 from vanilla vs asm-9.9 from Fabric) so only one version
+// ends up on the classpath. Fabric's LoaderUtil.verifyClasspath() hard-crashes
+// if it detects duplicate class files from two different versions of the same jar.
+static Str maven_ga_key(const char* path) {
+    Str r{};
+    if (!path || !*path) return r;
+    size_t len = strlen(path);
+    int slashes = 0;
+    size_t cut = len;
+    for (size_t i = len; i > 0; --i) {
+        if (path[i-1] == '/' || path[i-1] == '\\') {
+            if (++slashes == 2) { cut = i - 1; break; }
+        }
+    }
+    r.append(path, cut);
+    return r;
+}
+
+struct CPEntry { Str ga_key; Str full_path; };
+
 static Str build_classpath(const WStr& root, const JVal& vj, const JVal& parent_vj,
                             const char* jar_ver) {
-    Str cp{};
     WStr lib_dir = pjoin(root, "libraries");
+    Vec<CPEntry> entries{};
 
     auto add_libs = [&](const JVal& j) {
         if (!j.has("libraries")) return;
@@ -1327,10 +1350,25 @@ static Str build_classpath(const WStr& root, const JVal& vj, const JVal& parent_
             }
             if (!path || !*path) continue;
             WStr jar = pjoin(lib_dir, path);
-            if (path_exists(jar)) {
-                Str js = path_to_str(jar);
-                cp.append(js.p, js.n);
-                cp.append_c(';');
+            if (!path_exists(jar)) continue;
+
+            Str ga   = maven_ga_key(path);
+            Str full = path_to_str(jar);
+
+            // If same group:artifact is already listed, replace it so the later
+            // (Fabric) version wins and there are no duplicate classes.
+            bool found = false;
+            for (size_t k = 0; k < entries.n; ++k) {
+                if (entries.p[k].ga_key.eq(ga.c_str())) {
+                    entries.p[k].full_path.copy_from(full);
+                    found = true; break;
+                }
+            }
+            if (!found) {
+                CPEntry e{};
+                e.ga_key.copy_from(ga);
+                e.full_path.copy_from(full);
+                entries.push_back(e);
             }
         }
     };
@@ -1338,10 +1376,14 @@ static Str build_classpath(const WStr& root, const JVal& vj, const JVal& parent_
     if (!parent_vj.is_null()) { add_libs(parent_vj); add_libs(vj); }
     else                        add_libs(vj);
 
+    Str cp{};
+    for (size_t i = 0; i < entries.n; ++i) {
+        cp.append(entries.p[i].full_path.p, entries.p[i].full_path.n);
+        cp.append_c(';');
+    }
     Str jar_name{}; jar_name.assign_s(jar_ver); jar_name.append_s(".jar");
     WStr main_jar = pjoin(pjoin(pjoin(root, "versions"), jar_ver), jar_name.c_str());
-    Str mjs = path_to_str(main_jar);
-    cp.append(mjs.p, mjs.n);
+    cp.append(path_to_str(main_jar).p, path_to_str(main_jar).n);
     return cp;
 }
 
