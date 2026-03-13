@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <new>
 #pragma comment(lib, "winhttp.lib")
 
 static const size_t NPOS = (size_t)-1;
@@ -19,8 +20,14 @@ struct Str {
     Str(const Str& o) : p(nullptr), n(0), cap(0) {
         if (o.n) { p = (char*)malloc(o.n + 1); memcpy(p, o.p, o.n + 1); n = o.n; cap = o.n; }
     }
+    Str(Str&& o) noexcept : p(o.p), n(o.n), cap(o.cap) { o.p = nullptr; o.n = 0; o.cap = 0; }
+    ~Str() { free(p); }
     Str& operator=(const Str& o) {
-        if (this != &o) { p = nullptr; n = 0; cap = 0; if (o.n) { p = (char*)malloc(o.n + 1); memcpy(p, o.p, o.n + 1); n = o.n; cap = o.n; } }
+        if (this != &o) { free(p); p = nullptr; n = 0; cap = 0; if (o.n) { p = (char*)malloc(o.n + 1); memcpy(p, o.p, o.n + 1); n = o.n; cap = o.n; } }
+        return *this;
+    }
+    Str& operator=(Str&& o) noexcept {
+        if (this != &o) { free(p); p = o.p; n = o.n; cap = o.cap; o.p = nullptr; o.n = 0; o.cap = 0; }
         return *this;
     }
     void grow(size_t need) {
@@ -77,9 +84,7 @@ struct Str {
         if (pos) t.append(p, pos);
         t.append(rep, rl);
         if (pos + rlen <= n) t.append(p + pos + rlen, n - pos - rlen);
-        free(p);
-        p = t.p; n = t.n; cap = t.cap;
-        t.p = nullptr;
+        *this = (Str&&)t;
     }
     void to_lower() { for (size_t i = 0; i < n; ++i) p[i] = (char)tolower((uint8_t)p[i]); }
     bool ends_with(const char* s) const {
@@ -95,8 +100,14 @@ struct WStr {
     WStr(const WStr& o) : p(nullptr), n(0), cap(0) {
         if (o.n) { p = (wchar_t*)malloc((o.n + 1)*sizeof(wchar_t)); memcpy(p, o.p, (o.n + 1)*sizeof(wchar_t)); n = o.n; cap = o.n; }
     }
+    WStr(WStr&& o) noexcept : p(o.p), n(o.n), cap(o.cap) { o.p = nullptr; o.n = 0; o.cap = 0; }
+    ~WStr() { free(p); }
     WStr& operator=(const WStr& o) {
-        if (this != &o) { p = nullptr; n = 0; cap = 0; if (o.n) { p = (wchar_t*)malloc((o.n + 1)*sizeof(wchar_t)); memcpy(p, o.p, (o.n + 1)*sizeof(wchar_t)); n = o.n; cap = o.n; } }
+        if (this != &o) { free(p); p = nullptr; n = 0; cap = 0; if (o.n) { p = (wchar_t*)malloc((o.n + 1)*sizeof(wchar_t)); memcpy(p, o.p, (o.n + 1)*sizeof(wchar_t)); n = o.n; cap = o.n; } }
+        return *this;
+    }
+    WStr& operator=(WStr&& o) noexcept {
+        if (this != &o) { free(p); p = o.p; n = o.n; cap = o.cap; o.p = nullptr; o.n = 0; o.cap = 0; }
         return *this;
     }
     void grow(size_t need) {
@@ -129,23 +140,39 @@ template<typename T>
 struct Vec {
     T*     p;
     size_t n, cap;
+    Vec() : p(nullptr), n(0), cap(0) {}
+    Vec(Vec&& o) noexcept : p(o.p), n(o.n), cap(o.cap) { o.p = nullptr; o.n = 0; o.cap = 0; }
+    ~Vec() {
+        for (size_t i = 0; i < n; ++i) p[i].~T();
+        free(p);
+    }
+    Vec& operator=(Vec&& o) noexcept {
+        if (this != &o) {
+            for (size_t i = 0; i < n; ++i) p[i].~T();
+            free(p);
+            p = o.p; n = o.n; cap = o.cap;
+            o.p = nullptr; o.n = 0; o.cap = 0;
+        }
+        return *this;
+    }
     void reserve(size_t c) {
         if (c <= cap) return;
         size_t nc = cap ? cap * 2 : 4;
         if (nc < c) nc = c;
         p = (T*)realloc(p, nc * sizeof(T));
-        memset(p + cap, 0, (nc - cap) * sizeof(T));
+        for (size_t i = cap; i < nc; ++i) new (&p[i]) T();
         cap = nc;
     }
     void push_back(const T& v) { reserve(n + 1); p[n++] = v; }
+    void push_back(T&& v)      { reserve(n + 1); p[n++] = (T&&)v; }
     T& back()                       { return p[n-1]; }
     const T& back() const           { return p[n-1]; }
     T& operator[](size_t i)         { return p[i]; }
     const T& operator[](size_t i) const { return p[i]; }
     size_t size()  const { return n; }
     bool   empty() const { return n == 0; }
-    void   clear()       { n = 0; }
-    void   pop_back()    { if (n) --n; }
+    void   clear()       { for (size_t i = 0; i < n; ++i) p[i].~T(); n = 0; }
+    void   pop_back()    { if (n) { --n; p[n].~T(); } }
 };
 
 struct JVal {
@@ -155,6 +182,38 @@ struct JVal {
     Str    sval;
     JVal*  arr;      size_t arr_n, arr_cap;
     Str*   obj_keys; JVal*  obj_vals; size_t obj_n, obj_cap;
+
+    JVal() : type(Null_), bval(false), nval(0), arr(nullptr), arr_n(0), arr_cap(0), obj_keys(nullptr), obj_vals(nullptr), obj_n(0), obj_cap(0) {}
+    JVal(JVal&& o) noexcept : type(o.type), bval(o.bval), nval(o.nval), sval((Str&&)o.sval),
+                              arr(o.arr), arr_n(o.arr_n), arr_cap(o.arr_cap),
+                              obj_keys(o.obj_keys), obj_vals(o.obj_vals), obj_n(o.obj_n), obj_cap(o.obj_cap) {
+        o.type = Null_; o.arr = nullptr; o.obj_keys = nullptr; o.obj_vals = nullptr;
+        o.arr_n = 0; o.arr_cap = 0; o.obj_n = 0; o.obj_cap = 0;
+    }
+    ~JVal() {
+        if (type == Arr_) {
+            for (size_t i = 0; i < arr_n; ++i) arr[i].~JVal();
+            free(arr);
+        } else if (type == Obj_) {
+            for (size_t i = 0; i < obj_n; ++i) {
+                obj_keys[i].~Str();
+                obj_vals[i].~JVal();
+            }
+            free(obj_keys);
+            free(obj_vals);
+        }
+    }
+    JVal& operator=(JVal&& o) noexcept {
+        if (this != &o) {
+            this->~JVal();
+            type = o.type; bval = o.bval; nval = o.nval; sval = (Str&&)o.sval;
+            arr = o.arr; arr_n = o.arr_n; arr_cap = o.arr_cap;
+            obj_keys = o.obj_keys; obj_vals = o.obj_vals; obj_n = o.obj_n; obj_cap = o.obj_cap;
+            o.type = Null_; o.arr = nullptr; o.obj_keys = nullptr; o.obj_vals = nullptr;
+            o.arr_n = 0; o.arr_cap = 0; o.obj_n = 0; o.obj_cap = 0;
+        }
+        return *this;
+    }
 
     bool is_null()   const { return type == Null_; }
     bool is_string() const { return type == Str_; }
@@ -187,10 +246,13 @@ struct JVal {
             size_t nc = obj_cap ? obj_cap * 2 : 4;
             obj_keys = (Str*)  realloc(obj_keys, nc * sizeof(Str));
             obj_vals = (JVal*) realloc(obj_vals, nc * sizeof(JVal));
+            for (size_t i = obj_cap; i < nc; ++i) {
+                new (&obj_keys[i]) Str();
+                new (&obj_vals[i]) JVal();
+            }
             obj_cap = nc;
         }
-        obj_keys[obj_n] = {}; obj_keys[obj_n].append(k, kl);
-        obj_vals[obj_n] = {};
+        obj_keys[obj_n].append(k, kl);
         return obj_vals[obj_n++];
     }
     const JVal& operator[](size_t i) const { return arr[i]; }
@@ -200,19 +262,24 @@ struct JVal {
         if (arr_n >= arr_cap) {
             size_t nc = arr_cap ? arr_cap * 2 : 4;
             arr = (JVal*)realloc(arr, nc * sizeof(JVal));
+            for (size_t i = arr_cap; i < nc; ++i) new (&arr[i]) JVal();
             arr_cap = nc;
         }
-        arr[arr_n++] = v;
+        arr[arr_n++] = (JVal&&)v;
     }
     void push_obj_kv(Str k, JVal v) {
         if (obj_n >= obj_cap) {
             size_t nc = obj_cap ? obj_cap * 2 : 4;
             obj_keys = (Str*)  realloc(obj_keys, nc * sizeof(Str));
             obj_vals = (JVal*) realloc(obj_vals, nc * sizeof(JVal));
+            for (size_t i = obj_cap; i < nc; ++i) {
+                new (&obj_keys[i]) Str();
+                new (&obj_vals[i]) JVal();
+            }
             obj_cap = nc;
         }
-        obj_keys[obj_n] = k;
-        obj_vals[obj_n] = v;
+        obj_keys[obj_n] = (Str&&)k;
+        obj_vals[obj_n] = (JVal&&)v;
         ++obj_n;
     }
 };
@@ -258,7 +325,7 @@ static JVal parse_obj(const char*& p) {
         skip_ws(p);
         if (*p == ':') ++p;
         JVal val = parse_val(p);
-        v.push_obj_kv(key, val);
+        v.push_obj_kv((Str&&)key, (JVal&&)val);
         skip_ws(p);
         if (*p == ',') ++p;
     }
@@ -514,7 +581,7 @@ static HINTERNET open_req(const Str& url_s, HINTERNET& out_conn, int max_redir =
                 while (ln && loc[ln-1] == 0) --ln;
                 loc[ln] = 0;
                 Str next = to_utf8_str(loc);
-                cur.copy_from(next);
+                cur = (Str&&)next;
                 free(loc);
             }
             WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn);
@@ -627,6 +694,8 @@ struct Config {
     Str java_args;
     int ram_gb;
     int theme_color;
+    bool hide_launcher;
+    bool show_console;
 };
 
 static Config make_default_config() {
@@ -635,6 +704,8 @@ static Config make_default_config() {
     c.java_path.assign_s("javaw");
     c.ram_gb = 2;
     c.theme_color = 7;
+    c.hide_launcher = true;
+    c.show_console = false;
     return c;
 }
 
@@ -654,11 +725,13 @@ static Config load_config(const WStr& path) {
     Str s = read_file(path);
     if (s.empty()) return c;
     JVal j = parse_json(s);
-    if (j.has("username"))    c.username.copy_from(Str{} = {}), c.username.assign_s(j["username"].str());
+    if (j.has("username"))    c.username = (Str&&)Str{}, c.username.assign_s(j["username"].str());
     if (j.has("java_path"))   c.java_path.assign_s(j["java_path"].str());
     if (j.has("java_args"))   c.java_args.assign_s(j["java_args"].str());
     if (j.has("ram_gb"))      c.ram_gb      = (int)j["ram_gb"].num();
     if (j.has("theme_color")) c.theme_color = (int)j["theme_color"].num();
+    if (j.has("hide_launcher")) c.hide_launcher = j["hide_launcher"].bval;
+    if (j.has("show_console"))  c.show_console  = j["show_console"].bval;
     if (c.ram_gb < 1) c.ram_gb = 1;
     return c;
 }
@@ -670,8 +743,10 @@ static void save_config(const Config& c, const WStr& path) {
     char buf[1024];
     int n = snprintf(buf, sizeof(buf),
         "{\n  \"username\": \"%s\",\n  \"java_path\": \"%s\","
-        "\n  \"java_args\": \"%s\",\n  \"ram_gb\": %d,\n  \"theme_color\": %d\n}\n",
-        eu.c_str(), ej.c_str(), ea.c_str(), c.ram_gb, c.theme_color);
+        "\n  \"java_args\": \"%s\",\n  \"ram_gb\": %d,\n  \"theme_color\": %d,"
+        "\n  \"hide_launcher\": %s,\n  \"show_console\": %s\n}\n",
+        eu.c_str(), ej.c_str(), ea.c_str(), c.ram_gb, c.theme_color,
+        c.hide_launcher ? "true" : "false", c.show_console ? "true" : "false");
     if (n > 0) write_file(path, buf, (size_t)n);
 }
 
@@ -870,9 +945,9 @@ static void download_libraries_to_tasks(const WStr& root, const JVal& vj,
             if (!base_url.empty() && base_url.back() != '/') base_url.append_c('/');
             base_url.append(path.p, path.n);
             DLTask t{};
-            t.url.copy_from(base_url);
+            t.url = (Str&&)base_url;
             t.dest = pjoin(lib_dir, path.c_str());
-            tasks.push_back(t);
+            tasks.push_back((DLTask&&)t);
             continue;
         }
 
@@ -894,7 +969,7 @@ static void download_libraries_to_tasks(const WStr& root, const JVal& vj,
                     DLTask t{};
                     t.url.assign_s(u);
                     t.dest = pjoin(lib_dir, p);
-                    tasks.push_back(t);
+                    tasks.push_back((DLTask&&)t);
                 }
             }
         }
@@ -907,7 +982,7 @@ static void download_libraries_to_tasks(const WStr& root, const JVal& vj,
                 DLTask t{};
                 t.url.assign_s(u);
                 t.dest = pjoin(lib_dir, p);
-                tasks.push_back(t);
+                tasks.push_back((DLTask&&)t);
             }
         }
     }
@@ -989,7 +1064,7 @@ static bool install_bundled_jre(const WStr& root, Config& cfg, const WStr& cfg_p
         Str es = to_utf8_str(existing.c_str());
         printf("  Found Mojang JRE (%s): %s\n", component, es.c_str());
         if (!check_java(cfg.java_path)) {
-            cfg.java_path.copy_from(es);
+            cfg.java_path = (Str&&)es;
             save_config(cfg, cfg_path);
         }
         return true;
@@ -1001,8 +1076,8 @@ static bool install_bundled_jre(const WStr& root, Config& cfg, const WStr& cfg_p
     if (ans.empty() || (ans.p[0] != 'y' && ans.p[0] != 'Y')) return false;
 
     fputs("  Fetching Mojang runtime index...\n", stdout);
-    Str url{}; url.assign_s(RUNTIME_ALL_URL);
-    Str all_str = http_get_str(url);
+    Str all_str = http_get_str(Str{} = {}), url{}; url.assign_s(RUNTIME_ALL_URL);
+    all_str = http_get_str(url);
     if (all_str.empty()) { fputs("  Failed to fetch runtime index.\n", stderr); return false; }
     JVal all_j = parse_json(all_str);
 
@@ -1044,8 +1119,8 @@ static bool install_bundled_jre(const WStr& root, Config& cfg, const WStr& cfg_p
 
         DLTask t{};
         t.url.assign_s(dl_url);
-        t.dest.copy_from(rel);
-        tasks.push_back(t);
+        t.dest = (WStr&&)rel;
+        tasks.push_back((DLTask&&)t);
     }
 
     printf("  Downloading %zu JRE files...\n", tasks.n);
@@ -1060,7 +1135,7 @@ static bool install_bundled_jre(const WStr& root, Config& cfg, const WStr& cfg_p
 
     Str found_s = to_utf8_str(found.c_str());
     printf("  Mojang JRE (%s) installed: %s\n", component, found_s.c_str());
-    cfg.java_path.copy_from(found_s);
+    cfg.java_path = (Str&&)found_s;
     save_config(cfg, cfg_path);
     return true;
 }
@@ -1107,8 +1182,8 @@ static bool download_assets(const WStr& root, const JVal& vj) {
         t.url.append_s(pfx);
         t.url.append_c('/');
         t.url.append_s(hash);
-        t.dest.copy_from(dest);
-        tasks.push_back(t);
+        t.dest = (WStr&&)dest;
+        tasks.push_back((DLTask&&)t);
     }
 
     printf("  Fetching %zu assets (%zu already cached)...\n",
@@ -1249,7 +1324,7 @@ struct VarMap {
         KVPair p{};
         p.key.append(k, kl);
         p.val.assign_s(v);
-        pairs.push_back(p);
+        pairs.push_back((KVPair&&)p);
     }
     const Str* get(const char* k, size_t kl) const {
         for (size_t i = 0; i < pairs.n; ++i)
@@ -1306,12 +1381,6 @@ static Str win_quote(const Str& s) {
     return r;
 }
 
-// Returns the "group/artifact" portion of a maven relative path, e.g.
-// "org/ow2/asm/asm/9.6/asm-9.6.jar" -> "org/ow2/asm/asm".
-// Used to deduplicate libraries that appear in both vanilla and Fabric
-// (e.g. asm-9.6 from vanilla vs asm-9.9 from Fabric) so only one version
-// ends up on the classpath. Fabric's LoaderUtil.verifyClasspath() hard-crashes
-// if it detects duplicate class files from two different versions of the same jar.
 static Str maven_ga_key(const char* path) {
     Str r{};
     if (!path || !*path) return r;
@@ -1355,20 +1424,18 @@ static Str build_classpath(const WStr& root, const JVal& vj, const JVal& parent_
             Str ga   = maven_ga_key(path);
             Str full = path_to_str(jar);
 
-            // If same group:artifact is already listed, replace it so the later
-            // (Fabric) version wins and there are no duplicate classes.
             bool found = false;
             for (size_t k = 0; k < entries.n; ++k) {
                 if (entries.p[k].ga_key.eq(ga.c_str())) {
-                    entries.p[k].full_path.copy_from(full);
+                    entries.p[k].full_path = (Str&&)full;
                     found = true; break;
                 }
             }
             if (!found) {
                 CPEntry e{};
-                e.ga_key.copy_from(ga);
-                e.full_path.copy_from(full);
-                entries.push_back(e);
+                e.ga_key = (Str&&)ga;
+                e.full_path = (Str&&)full;
+                entries.push_back((CPEntry&&)e);
             }
         }
     };
@@ -1452,8 +1519,8 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
 
     char ram_buf[32];
     snprintf(ram_buf, sizeof(ram_buf), "-Xmx%dG", cfg.ram_gb);
-    Str ram_arg{}; ram_arg.assign_s(ram_buf); args.push_back(ram_arg);
-    Str ms_arg{}; ms_arg.assign_s("-Xms512m"); args.push_back(ms_arg);
+    Str ram_arg{}; ram_arg.assign_s(ram_buf); args.push_back((Str&&)ram_arg);
+    Str ms_arg{}; ms_arg.assign_s("-Xms512m"); args.push_back((Str&&)ms_arg);
 
     if (!cfg.java_args.empty()) {
         const char* p = cfg.java_args.c_str();
@@ -1463,14 +1530,14 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
             const char* start = p;
             while (*p && *p != ' ' && *p != '\t') ++p;
             Str tok{}; tok.append(start, p - start);
-            args.push_back(tok);
+            args.push_back((Str&&)tok);
         }
     }
 
     if (required_jdk(base_ver.c_str()) <= 8) {
-        Str a{}; a.assign_s("-XX:+UseConcMarkSweepGC"); args.push_back(a);
-        a.assign_s("-XX:+CMSIncrementalMode"); args.push_back(a);
-        a.assign_s("-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"); args.push_back(a);
+        Str a{}; a.assign_s("-XX:+UseConcMarkSweepGC"); args.push_back((Str&&)a);
+        a.assign_s("-XX:+CMSIncrementalMode"); args.push_back((Str&&)a);
+        a.assign_s("-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"); args.push_back((Str&&)a);
     } else {
         const char* gc_args[] = {
             "-XX:+UseG1GC", "-XX:+UnlockExperimentalVMOptions",
@@ -1478,7 +1545,7 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
             "-XX:MaxGCPauseMillis=50", "-XX:G1HeapRegionSize=32M"
         };
         for (int i = 0; i < 6; ++i) {
-            Str a{}; a.assign_s(gc_args[i]); args.push_back(a);
+            Str a{}; a.assign_s(gc_args[i]); args.push_back((Str&&)a);
         }
     }
 
@@ -1489,7 +1556,7 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
             const JVal& e = arr.arr[i];
             if (e.is_string()) {
                 Str a = tok_replace(e.str(), strlen(e.str()), vars);
-                args.push_back(a);
+                args.push_back((Str&&)a);
                 continue;
             }
             if (!e.is_object()) continue;
@@ -1507,37 +1574,32 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
             const JVal& val = e["value"];
             if (val.is_string()) {
                 Str a = tok_replace(val.str(), strlen(val.str()), vars);
-                args.push_back(a);
+                args.push_back((Str&&)a);
             } else if (val.is_array()) {
                 for (size_t vi = 0; vi < val.arr_n; ++vi) {
                     Str a = tok_replace(val.arr[vi].str(), strlen(val.arr[vi].str()), vars);
-                    args.push_back(a);
+                    args.push_back((Str&&)a);
                 }
             }
         }
     };
 
-    Str main_cls{}; main_cls.assign_s(main_cls_raw);
+    Str main_cls_s{}; main_cls_s.assign_s(main_cls_raw);
 
     if (base_vj.has("arguments")) {
-        Vec<Str> jvm_a{}, game_a{};
         size_t orig = args.n;
         collect_args(base_vj, "jvm");
         if (has_parent) collect_args(vj, "jvm");
-        Vec<Str> jvm_out{};
-        for (size_t i = orig; i < args.n; ++i) jvm_out.push_back(args.p[i]);
-        args.n = orig;
-        for (size_t i = 0; i < jvm_out.n; ++i) args.push_back(jvm_out.p[i]);
-        args.push_back(main_cls);
+        args.push_back((Str&&)main_cls_s);
         collect_args(base_vj, "game");
     } else {
         Str a{};
-        a.assign_s("-Djava.library.path="); a.append(nat_path.p, nat_path.n); args.push_back(a);
-        a.assign_s("-Dorg.lwjgl.librarypath="); a.append(nat_path.p, nat_path.n); args.push_back(a);
-        a.assign_s("-Dfile.encoding=UTF-8"); args.push_back(a);
-        a.assign_s("-cp"); args.push_back(a);
-        args.push_back(cp);
-        args.push_back(main_cls);
+        a.assign_s("-Djava.library.path="); a.append(nat_path.p, nat_path.n); args.push_back((Str&&)a);
+        a.assign_s("-Dorg.lwjgl.librarypath="); a.append(nat_path.p, nat_path.n); args.push_back((Str&&)a);
+        a.assign_s("-Dfile.encoding=UTF-8"); args.push_back((Str&&)a);
+        a.assign_s("-cp"); args.push_back((Str&&)a);
+        args.push_back((Str&&)cp);
+        args.push_back((Str&&)main_cls_s);
         const char* mc_args = base_vj["minecraftArguments"].str();
         const char* p = mc_args;
         while (p && *p) {
@@ -1547,12 +1609,12 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
             while (*p && *p != ' ') ++p;
             Str tok{}; tok.append(start, p - start);
             Str replaced = tok_replace_str(tok, vars);
-            args.push_back(replaced);
+            args.push_back((Str&&)replaced);
         }
     }
 
     Str java_exec{}; java_exec.copy_from(cfg.java_path);
-    {
+    if (!cfg.show_console) {
         size_t pos = java_exec.find_s("java.exe");
         if (pos != NPOS) {
             java_exec.replace_range(pos, 8, "javaw.exe");
@@ -1562,6 +1624,11 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
                     java_exec.p[java_exec.n-5] == '\\' ||
                     java_exec.p[java_exec.n-5] == '/')) {
             java_exec.append_c('w');
+        }
+    } else {
+        size_t pos = java_exec.find_s("javaw.exe");
+        if (pos != NPOS) {
+            java_exec.replace_range(pos, 9, "java.exe");
         }
     }
 
@@ -1585,8 +1652,14 @@ static bool launch_version(const WStr& root, const Config& cfg, const char* vers
     Str game_dir_w = path_to_str(root);
     WStr wgame_dir = to_wide_str(game_dir_w.c_str());
 
+    DWORD flags = CREATE_NEW_CONSOLE;
+    if (!cfg.show_console) {
+        si.dwFlags |= STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+    }
+
     if (!CreateProcessW(nullptr, wcmd.p, nullptr, nullptr, FALSE,
-                        CREATE_NEW_CONSOLE, nullptr, wgame_dir.c_str(), &si, &pi)) {
+                        flags, nullptr, wgame_dir.c_str(), &si, &pi)) {
         fprintf(stderr, "CreateProcess failed: %lu\n", GetLastError());
         return false;
     }
@@ -1619,7 +1692,7 @@ static Vec<Str> get_installed_versions(const WStr& root) {
 
         Str jar_name{}; jar_name.copy_from(name); jar_name.append_s(".jar");
         WStr jar = pjoin(entry_dir, jar_name.c_str());
-        if (path_exists(jar) && path_file_size(jar) > 1024) { v.push_back(name); continue; }
+        if (path_exists(jar) && path_file_size(jar) > 1024) { v.push_back((Str&&)name); continue; }
 
         Str js = read_file(json_p);
         if (js.empty()) continue;
@@ -1629,7 +1702,7 @@ static Vec<Str> get_installed_versions(const WStr& root) {
             Str bjar_name{}; bjar_name.assign_s(base); bjar_name.append_s(".jar");
             WStr base_jar = pjoin(pjoin(ver_dir, base), bjar_name.c_str());
             if (path_exists(base_jar) && path_file_size(base_jar) > 1024)
-                v.push_back(name);
+                v.push_back((Str&&)name);
         }
     } while (FindNextFileW(h, &fd));
     FindClose(h);
@@ -1676,7 +1749,7 @@ static void section_download(const WStr& root, Config& cfg, const WStr& cfg_path
             VE e{};
             e.id.assign_s(fv.arr[i]["version"].str());
             e.type.assign_s(fv.arr[i]["stable"].bval ? "release" : "snapshot");
-            entries.push_back(e);
+            entries.push_back((VE&&)e);
         }
         fputs("Fetching Mojang manifest (needed for base download)...\n", stdout);
         Str mu{}; mu.assign_s(MANIFEST_URL);
@@ -1696,7 +1769,7 @@ static void section_download(const WStr& root, Config& cfg, const WStr& cfg_path
             VE e{};
             e.id.assign_s(manifest["versions"].arr[i]["id"].str());
             e.type.assign_s(manifest["versions"].arr[i]["type"].str());
-            entries.push_back(e);
+            entries.push_back((VE&&)e);
         }
     }
 
@@ -1707,8 +1780,10 @@ static void section_download(const WStr& root, Config& cfg, const WStr& cfg_path
     Vec<VE> filtered{};
     filtered.reserve(entries.n);
     for (size_t i = 0; i < entries.n; ++i)
-        if (!releases_only || entries.p[i].type.eq("release"))
-            filtered.push_back(entries.p[i]);
+        if (!releases_only || entries.p[i].type.eq("release")) {
+            VE e{}; e.id.copy_from(entries.p[i].id); e.type.copy_from(entries.p[i].type);
+            filtered.push_back((VE&&)e);
+        }
 
     int page = 0;
     const int PAGE = 20;
@@ -1777,21 +1852,25 @@ static void section_download(const WStr& root, Config& cfg, const WStr& cfg_path
 static void section_settings(Config& cfg, const WStr& cfg_path) {
     for (;;) {
         print_header("SETTINGS");
-        printf("  [1] Username   : %s\n"
-               "  [2] RAM (GB)   : %dGB\n"
-               "  [3] Java Path  : %s\n"
-               "  [4] Java Args  : %s\n"
-               "  [5] Back\n\nChoice: ",
+        printf("  [1] Username      : %s\n"
+               "  [2] RAM (GB)      : %dGB\n"
+               "  [3] Java Path     : %s\n"
+               "  [4] Java Args     : %s\n"
+               "  [5] Hide Launcher : %s\n"
+               "  [6] Show Console  : %s\n"
+               "  [7] Back\n\nChoice: ",
                cfg.username.c_str(), cfg.ram_gb,
                cfg.java_path.c_str(),
-               cfg.java_args.empty() ? "(none)" : cfg.java_args.c_str());
+               cfg.java_args.empty() ? "(none)" : cfg.java_args.c_str(),
+               cfg.hide_launcher ? "ON" : "OFF",
+               cfg.show_console  ? "ON" : "OFF");
 
         Str input = read_line();
 
         if (input.eq("1")) {
             printf("New username [%s]: ", cfg.username.c_str());
             Str val = read_line();
-            if (!val.empty()) cfg.username.copy_from(val);
+            if (!val.empty()) cfg.username = (Str&&)val;
         } else if (input.eq("2")) {
             printf("RAM in GB [%d]: ", cfg.ram_gb);
             Str val = read_line();
@@ -1805,14 +1884,18 @@ static void section_settings(Config& cfg, const WStr& cfg_path) {
             Str val = read_line();
             if (!val.empty()) {
                 if (!check_java(val)) fputs("Warning: could not verify java at that path.\n", stdout);
-                cfg.java_path.copy_from(val);
+                cfg.java_path = (Str&&)val;
             }
         } else if (input.eq("4")) {
             printf("Extra Java args (space-separated) [%s]: ",
                    cfg.java_args.empty() ? "none" : cfg.java_args.c_str());
             Str val = read_line();
-            cfg.java_args.copy_from(val);
-        } else if (input.eq("5") || input.eq("q") || input.eq("Q")) {
+            cfg.java_args = (Str&&)val;
+        } else if (input.eq("5")) {
+            cfg.hide_launcher = !cfg.hide_launcher;
+        } else if (input.eq("6")) {
+            cfg.show_console = !cfg.show_console;
+        } else if (input.eq("7") || input.eq("q") || input.eq("Q")) {
             break;
         }
         save_config(cfg, cfg_path);
@@ -1895,8 +1978,8 @@ static void section_launch(const WStr& root, Config& cfg, const WStr& cfg_path) 
         WStr vj_path = pjoin(pjoin(pjoin(root, "versions"), chosen), vjname.c_str());
         if (path_exists(vj_path)) {
             Str vs = read_file(vj_path);
-            JVal vj = parse_json(vs);
-            if (vj.has("inheritsFrom")) base_ver.assign_s(vj["inheritsFrom"].str());
+            JVal jv = parse_json(vs);
+            if (jv.has("inheritsFrom")) base_ver.assign_s(jv["inheritsFrom"].str());
         }
     }
     if (!check_java(cfg.java_path)) {
@@ -1912,12 +1995,36 @@ static void section_launch(const WStr& root, Config& cfg, const WStr& cfg_path) 
     } else {
         fputs("Game launched! Exiting launcher...\n", stdout);
         Sleep(1500);
+        if (cfg.hide_launcher) exit(0);
+    }
+}
+
+static void init_console() {
+    HWND hwnd = GetConsoleWindow();
+    if (hwnd) {
+        SetWindowLong(hwnd, GWL_EXSTYLE, GetWindowLong(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+        SetLayeredWindowAttributes(hwnd, 0, 229, LWA_ALPHA);
+
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        COORD coord = { 50, 15 };
+        SMALL_RECT rect = { 0, 0, 49, 14 };
+
+        SMALL_RECT tmp = { 0, 0, 0, 0 };
+        SetConsoleWindowInfo(hOut, TRUE, &tmp);
+        SetConsoleScreenBufferSize(hOut, coord);
+        SetConsoleWindowInfo(hOut, TRUE, &rect);
+
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        style &= ~WS_VSCROLL;
+        style &= ~WS_HSCROLL;
+        SetWindowLong(hwnd, GWL_STYLE, style);
     }
 }
 
 int main() {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleTitleW(L"GoonMC by TryFast");
+    init_console();
     InitializeCriticalSection(&g_mkdir_cs);
 
     wchar_t exe[MAX_PATH]{};
@@ -1936,19 +2043,18 @@ int main() {
     if (cfg.username.empty() || cfg.username.eq("Player")) {
         fputs("=== GoonMC by TryFast ===\n\nEnter your username: ", stdout);
         Str uname = read_line();
-        if (!uname.empty()) cfg.username.copy_from(uname);
+        if (!uname.empty()) cfg.username = (Str&&)uname;
         if (cfg.username.empty()) cfg.username.assign_s("Player");
         save_config(cfg, cfg_path);
     }
 
     for (;;) {
         print_header("GoonMC by TryFast");
-        fputs("  [1] Download\n  [2] Settings\n  [3] Launch\n  [4] Themes\n  [5] Exit\n\nChoice: ", stdout);
+        fputs("  [1] Launch\n  [2] Download\n  [3] Settings\n  [4] Themes\n  [5] Exit\n\nChoice: ", stdout);
         Str input = read_line();
-
-        if      (input.eq("1")) section_download(root, cfg, cfg_path);
-        else if (input.eq("2")) section_settings(cfg, cfg_path);
-        else if (input.eq("3")) section_launch(root, cfg, cfg_path);
+        if      (input.eq("1")) section_launch(root, cfg, cfg_path);
+        else if (input.eq("2")) section_download(root, cfg, cfg_path);
+        else if (input.eq("3")) section_settings(cfg, cfg_path);
         else if (input.eq("4")) section_themes(cfg, cfg_path);
         else if (input.eq("5") || input.eq("q") || input.eq("Q")) break;
     }
