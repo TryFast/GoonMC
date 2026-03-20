@@ -33,9 +33,9 @@ or
 ## Building from Source
 
 Clone the repo by clicking on the green `Code` button and click on `Download ZIP` then extract the folder,
-Make sure you have MinGW-w64 installed and `g++` available in your PATH, then run:
+Make sure you have MinGW-w64 installed and `g++` available in your PATH, then run Open CMD and run:
 
-```Open CMD
+```batch
 cd path\to\your\folder\where\the\exe\file\is\located
 g++ -std=c++17 -O2 -o GoonMC.exe GoonMC.cpp -lwinhttp
 ```
