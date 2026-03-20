@@ -1,4 +1,4 @@
-# GoonMC
+# MC++
 
 A lightweight command line Minecraft launcher for Windows, written purely in C++.
 
@@ -37,14 +37,14 @@ Make sure you have MinGW-w64 installed and `g++` available in your PATH, then ru
 
 ```batch
 cd path\to\your\folder\where\the\exe\file\is\located
-g++ -std=c++17 -O2 -o GoonMC.exe GoonMC.cpp -lwinhttp
+g++ -std=c++17 -O2 -o MCPP.exe MCPP.cpp -lwinhttp
 ```
 
 ---
 
 ## Usage
 
-Run `GoonMC.exe` and use the menu to navigate:
+Run `MCPP.exe` and use the menu to navigate:
 
 ```
 [1] Launch      // Launch an installed version
