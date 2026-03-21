@@ -2,11 +2,11 @@
 <img src="https://mcppp.vercel.app/icon.png" alt="mcpp-logo" width="15%"/>
 </p>
 
+<div align="center">
 # MC++ 
 
 A lightweight command line Minecraft launcher for Windows, written purely in C++.
 
-<div align="center">
   <img src="https://img.shields.io/github/v/release/TryFast/MCPP-Launcher" alt="Latest Release"/>
   <img src="https://img.shields.io/github/downloads/TryFast/MCPP-Launcher/total" alt="Total Downloads"/>
   <img src="https://img.shields.io/github/stars/TryFast/MCPP-Launcher" alt="Stars"/>
