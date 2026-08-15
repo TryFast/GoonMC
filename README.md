@@ -51,7 +51,7 @@ Make sure you have MinGW-w64 installed and `g++` available in your PATH, then ru
 
 ```batch
 cd path\to\your\folder\where\the\cpp\file\is\located
-g++ -std=c++17 -O2 -o MCPP.exe MCPP.cpp -lwinhttp
+g++ MCPP.cpp -o MCPP.exe -static -static-libgcc -static-libstdc++ -lwinhttp
 ```
 
 ---
